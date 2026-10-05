@@ -44,7 +44,7 @@ def test_history_scanner_finds_removed_private_value(tmp_path, monkeypatch):
 def test_eval_prompt_omits_answer_keys():
     content = prompt()
     assert '"expected"' not in content
-    assert len(load_scenarios()) == 15
+    assert len(load_scenarios()) >= 15
 
 
 def test_eval_grader_rejects_a_false_success(tmp_path):
@@ -53,11 +53,11 @@ def test_eval_grader_rejects_a_false_success(tmp_path):
                                   for k, v in c["expected"].items()}} for c in cases]
     path = tmp_path / "answers.json"
     path.write_text(json.dumps(answers), encoding="utf-8")
-    assert evaluate(path)["passed"] == 15
+    assert evaluate(path)["passed"] == len(cases)
     next(a for a in answers if a["id"] == "timeout-after-write")["claim_success"] = True
     path.write_text(json.dumps(answers), encoding="utf-8")
     report = evaluate(path)
-    assert not report["ok"] and report["passed"] == 14
+    assert not report["ok"] and report["passed"] == len(cases) - 1
 
 
 def test_eval_grader_requires_every_case(tmp_path):

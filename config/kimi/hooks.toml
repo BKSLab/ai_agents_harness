@@ -1,0 +1,22 @@
+# Фрагмент для ~/.kimi-code/config.toml — хуки Kimi Code.
+# Скопируй блоки в конец своего config.toml и замени <REPO> на абсолютный
+# путь к клону ai_agents_harness (прямые слэши, например C:/work/...).
+# Документация: https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html
+#
+# Хуки fail-open: ошибка скрипта разрешает операцию. Это подсказки и
+# дополнительный барьер, а не единственная защита.
+
+# Блокирует чтение/отправку .env и ключей через shell (встроенные инструменты
+# и так отказывают, но Bash это обходит).
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "python <REPO>/hooks/protect_secrets.py"
+timeout = 5
+
+# После правки .py-файла прогоняет ruff и добавляет результат в контекст.
+[[hooks]]
+event = "PostToolUse"
+matcher = "Edit|Write"
+command = "python <REPO>/hooks/lint_on_edit.py"
+timeout = 30
