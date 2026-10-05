@@ -1,6 +1,7 @@
 """Guard delivered representations, process budgets and persisted diagnostics."""
 
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -51,6 +52,45 @@ def start_task(root):
     })
     tasks.approve("artifacts", root, "Synthetic test owner approved the plan")
     (root / "app.py").write_bytes(b"VALUE = 2\n")
+
+
+def test_snapshot_with_deep_private_state_preserves_git_settings(repository, tmp_path, monkeypatch):
+    # Reproduce hosted Windows runners without depending on their temp prefix.
+    state = tmp_path / ("state-" + "x" * max(0, 145 - len(str(tmp_path)) - 7))
+    monkeypatch.setenv("HARNESS_HOME", str(state))
+    git(repository, "config", "--global", "core.longpaths", "false")
+    global_config = Path(os.environ["GIT_CONFIG_GLOBAL"])
+    before_global = global_config.read_bytes()
+    before_local = (repository / ".git" / "config").read_bytes()
+    start_task(repository)
+    packet = tasks.snapshot("artifacts", repository)
+    assert tasks.verify("artifacts", repository, packet["snapshot_id"])["status"] == "passed"
+    assert artifacts.digest(artifacts.inventory(Path(packet["path"]))) == packet["fingerprint"]
+    assert global_config.read_bytes() == before_global
+    assert (repository / ".git" / "config").read_bytes() == before_local
+
+
+def test_snapshot_storage_inside_project_is_rejected_before_writing(repository, tmp_path, monkeypatch):
+    root = repository.rename(tmp_path / "snapshots")
+    monkeypatch.setenv("HARNESS_HOME", str(tmp_path))
+    start_task(root)
+    before = artifacts.inventory(root)
+    with pytest.raises(ValueError, match="snapshot storage outside the project"):
+        tasks.snapshot("artifacts", root)
+    assert artifacts.inventory(root) == before
+    assert not list(root.glob("snapshot-*"))
+    assert tasks.Store(root).load("artifacts")["snapshots"] == {}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Git/process path limit")
+def test_excessively_deep_windows_state_requires_shorter_home_before_copy(repository, tmp_path, monkeypatch):
+    state = tmp_path / ("state-" + "x" * max(0, 200 - len(str(tmp_path)) - 7))
+    monkeypatch.setenv("HARNESS_HOME", str(state))
+    start_task(repository)
+    with pytest.raises(ValueError, match="shorter HARNESS_HOME"):
+        tasks.snapshot("artifacts", repository)
+    assert not (state / "snapshots").exists()
+    assert tasks.Store(repository).load("artifacts")["snapshots"] == {}
 
 
 @pytest.mark.parametrize("attribute", ["filter=fixture", "filter=unset", "filter=unspecified", "working-tree-encoding=UTF-16", "ident"])
@@ -221,3 +261,11 @@ def test_hook_diagnostics_share_database_credential_masking(monkeypatch, capsys)
     assert report["details"]["database"] == "[REDACTED]"
     assert report["details"]["logs"] == ["postgres://[REDACTED]@db.example.invalid/app"]
     assert "fixture_password" not in captured.out and "other_password" not in captured.out
+
+
+def test_redaction_preserves_task_artifact_paths_and_masks_standalone_tokens():
+    path = "C:/private/tasks/project/task-110f6ea463a1d8446f52652a/checkpoint.json"
+    assert redact_credentials(path) == path
+    for prefix in ("sk-", "ghp_", "ghu_"):
+        token = prefix + "synthetic" * 4
+        assert redact_credentials(f"credential: '{token}'") == "credential: '[REDACTED]'"

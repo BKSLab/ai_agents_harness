@@ -397,9 +397,16 @@ def snapshot(task_id, project):
     if scope_problems(state, manifest):
         raise ValueError("Resolve scope violations before review.")
     snapshot_id = "snapshot-" + uuid.uuid4().hex[:16]
-    directory = store.directory(task_id) / "snapshots" / snapshot_id
+    # Keep the Git workspace shallow: nested project/task hashes can push even
+    # .git/objects past MAX_PATH on Windows. Existing packets retain their paths.
+    directory = store.root.parent / "snapshots" / snapshot_id
     root = directory / "workspace"
-    root.mkdir(parents=True, mode=0o700)
+    if directory.resolve().is_relative_to(store.project):
+        raise ValueError("Keep snapshot storage outside the project being verified.")
+    if os.name == "nt" and len(str(root)) > 200:
+        raise ValueError("Snapshot workspace path is too long for Windows Git; use a shorter HARNESS_HOME.")
+    directory.mkdir(parents=True, mode=0o700)
+    root.mkdir(mode=0o700)
     for path, expected in manifest.items():
         data = (store.project / path).read_bytes()
         if hashlib.sha256(data).hexdigest() != expected["sha256"]:
