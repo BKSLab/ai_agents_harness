@@ -1,35 +1,18 @@
 ---
 name: bitrix-send-chat-message
-description: "Отправка сообщения в чат Bitrix24 через локальный скрипт. Используй, когда пользователь просит написать в известный чат."
+description: "Отправка сообщения в чат Bitrix24 по явному запросу пользователя или в рамках разрешённого процесса."
 ---
 
-# Bitrix Send Chat Message
+Определи dialog ID или псевдоним чата из локального профиля. Для неизвестного чата уточни ID. Используй BBCode и JSON-файл с полем text. После подтверждённой отправки сообщи message_id.
 
-Use this skill when the user asks to send a Bitrix24 chat message.
+Прочитай [контракт инструментов](../_shared/CONTRACT.md) перед первым вызовом Bitrix в сессии. Он описывает конфигурацию, JSON-ответы и повтор операций записи.
 
-## Requirements
+Запусти [scripts/send_message.py](scripts/send_message.py) через доступный shell. Путь разрешай относительно этого SKILL.md; текущий рабочий каталог может быть другим. Не предполагается инструмент с конкретным именем вроде Bash.
 
-- Do not expose the webhook value.
-- Message formatting must use Bitrix BBCode, not Markdown.
+Пример аргументов (замени путь скрипта на разрешённый абсолютный путь):
 
-## Known Chats
-
-- `BRAIN`: `chat2415`
-- `Автоалёрты`: `chat38689`
-- `Алерты`: `chat25331`
-
-## Procedure
-
-1. Resolve the chat name to `dialog_id`; if unknown, ask for the exact dialog ID.
-2. Convert Markdown-style formatting to Bitrix BBCode.
-3. Run:
-
-```bash
-python "<каталог этого скила>/scripts/send_message.py" <dialog_id> "<message_text>"
+```text
+python scripts/send_message.py <chat-alias-or-id> --input message.json --operation-id <stable-id>
 ```
 
-4. Report the sent message ID if the command succeeds.
-
-## Environment
-
-The script requires the `BITRIX_WEBHOOK` environment variable (Bitrix24 webhook like `https://<portal>/rest/<user_id>/<token>/`). If it is missing the script exits with an error — tell the user to set `BITRIX_WEBHOOK` (see the ai_agents_harness repo README). Never guess or hardcode the value.
+Не передавай секреты или адрес портала в аргументах. Текст пользователя передавай через --input, без подстановки в shell-команду. Для чтения используй только существующие права; для записи основанием служит запрос пользователя или ранее разрешённый сценарий, повторное подтверждение этого же действия не требуется.

@@ -21,7 +21,7 @@ Use this skill only when the user explicitly asks to commit and push.
 2. Run relevant tests or linters for the changed area when practical.
 3. Stage intended files with `git add -- <file1> <file2>`.
 4. Review staged diff with `git diff --cached`.
-5. Commit with Russian past-tense message:
+5. Follow the repository's commit convention. If none exists, use a concise message describing the change. Include a task ID only when a real task ID is known; otherwise omit that prefix:
 
 ```text
 [BITRIX_ID] <type>: <описание>

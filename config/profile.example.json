@@ -1,0 +1,7 @@
+{
+  "user_id": 1,
+  "responsible_id": 1,
+  "auditors": [],
+  "users": {"reviewer": 2},
+  "chats": {"operations": "chat10"}
+}

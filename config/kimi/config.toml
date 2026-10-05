@@ -1,36 +1,4 @@
-# Шаблон ~/.kimi-code/config.toml
-# Скопировать в ~/.kimi-code/config.toml и заполнить авторизацию.
-# Подробности: https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/config-files.html
-
-# Скилы читаются прямо из репозитория ai_agents_harness — git pull обновляет сетап.
-# ПУТЬ ЗАМЕНИТЬ на фактическое расположение клона (install.sh делает это сам).
-extra_skill_dirs = ["C:/work/BKS.Lab/python/my_projects/ai_agents_harness/skills"]
-
-default_model = "kimi-code/k3"
-
-[providers."managed:kimi-code"]
-type = "kimi"
-api_key = ""  # заполняется при логине (kimi -> /login) или вручную
-base_url = "https://api.kimi.ai/coding/v1"
-
-[models."kimi-code/k3"]
-provider = "managed:kimi-code"
-model = "k3"
-max_context_size = 1048576
-capabilities = [ "thinking", "always_thinking", "image_in", "video_in", "tool_use", "dynamically_loaded_tools" ]
-display_name = "K3"
-support_efforts = [ "low", "high", "max" ]
-default_effort = "high"
-
-[models."kimi-code/k3-256k"]
-provider = "managed:kimi-code"
-model = "k3-256k"
-max_context_size = 262144
-capabilities = [ "thinking", "always_thinking", "image_in", "tool_use", "dynamically_loaded_tools" ]
-display_name = "K3-256k"
-support_efforts = [ "low", "high", "max" ]
-default_effort = "high"
-
-[thinking]
-enabled = true
-effort = "high"
+# Reference fragment only. The installer patches the existing config safely.
+# Do not replace your provider/authentication settings with this file.
+# Replace this example path with your clone; install.py handles the actual path.
+extra_skill_dirs = ["/absolute/path/to/ai_agents_harness/skills"]
