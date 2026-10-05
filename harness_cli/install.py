@@ -6,12 +6,19 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
+import sys
 import tempfile
+import tomllib
 
 import tomlkit
 
 ROOT = Path(__file__).resolve().parents[1]
+INSTRUCTIONS_START = b"<!-- BEGIN ai-agents-harness instructions -->"
+INSTRUCTIONS_END = b"<!-- END ai-agents-harness instructions -->"
+COMPONENTS = ("skills", "instructions", "hooks", "agents")
 
 
 def home():
@@ -57,8 +64,20 @@ def read_receipt(target):
     if not p.exists():
         return {}
     data = json.loads(p.read_text(encoding="utf-8"))
-    if data.get("owner") != "ai-agents-harness" or data.get("target") != str(target.resolve()):
+    if not isinstance(data, dict) or data.get("owner") != "ai-agents-harness" or data.get("target") != str(target.resolve()):
         raise ValueError("Invalid installation receipt.")
+    for key in ("files", "hook_files", "agent_files"):
+        if key in data and (not isinstance(data[key], dict) or any(
+            not isinstance(name, str) or not isinstance(value, str) for name, value in data[key].items()
+        )):
+            raise ValueError("Invalid installation receipt file metadata.")
+    if "hooks" in data and (not isinstance(data["hooks"], dict) or any(
+        not isinstance(name, str) or not isinstance(value, dict) for name, value in data["hooks"].items()
+    )):
+        raise ValueError("Invalid installation receipt hook metadata.")
+    for key in ("skill_dir", "agent_dir", "block_sha256"):
+        if key in data and not isinstance(data[key], str):
+            raise ValueError("Invalid installation receipt component metadata.")
     return data
 
 
@@ -69,6 +88,145 @@ def agent_targets(user_home=None):
         "claude": Path(os.environ.get("CLAUDE_CONFIG_DIR", str(user_home / ".claude"))) / "skills",
         "codex": user_home / ".agents" / "skills",
     }
+
+
+def instruction_targets(user_home=None):
+    user_home = Path(user_home or Path.home())
+    return {
+        "kimi": Path(os.environ.get("KIMI_CODE_HOME", str(user_home / ".kimi-code"))) / "AGENTS.md",
+        "claude": Path(os.environ.get("CLAUDE_CONFIG_DIR", str(user_home / ".claude"))) / "CLAUDE.md",
+        "codex": Path(os.environ.get("CODEX_HOME", str(user_home / ".codex"))) / "AGENTS.md",
+    }
+
+
+def source_version(source=ROOT):
+    path = source / "pyproject.toml"
+    if not path.is_file():
+        return None
+    with path.open("rb") as stream:
+        return tomllib.load(stream).get("project", {}).get("version")
+
+
+def instruction_block(source=ROOT):
+    path = confined(source, "global/AGENTS.md")
+    contents = path.read_bytes().replace(b"\r\n", b"\n").rstrip(b"\n")
+    if not contents or INSTRUCTIONS_START in contents or INSTRUCTIONS_END in contents:
+        raise ValueError("Global instructions must be nonempty and must not contain managed markers.")
+    contents.decode("utf-8")
+    return INSTRUCTIONS_START + b"\n" + contents + b"\n" + INSTRUCTIONS_END + b"\n"
+
+
+def instruction_span(contents):
+    """Locate only our delimited block, leaving every surrounding byte untouched."""
+    starts, ends = contents.count(INSTRUCTIONS_START), contents.count(INSTRUCTIONS_END)
+    if starts == ends == 0:
+        return None
+    if starts != 1 or ends != 1:
+        raise ValueError("Global instructions contain ambiguous managed markers; repair the markers first.")
+    pattern = rb"(?ms)^" + re.escape(INSTRUCTIONS_START) + rb"\r?\n.*?^" + re.escape(INSTRUCTIONS_END) + rb"(?:\r?\n|$)"
+    match = re.search(pattern, contents)
+    if not match:
+        raise ValueError("Global instructions contain malformed managed markers; repair the markers first.")
+    return match.span()
+
+
+def plan_instructions(target, source=ROOT, *, replace_conflicts=False):
+    if target.is_symlink() or (target.exists() and not target.is_file()):
+        raise ValueError("Instructions destination must be a regular file, not a symlink.")
+    before = target.read_bytes() if target.exists() else None
+    block = instruction_block(source)
+    receipt = read_receipt(target)
+    span = instruction_span(before or b"")
+    if span:
+        start, end = span
+        current = before[start:end]
+        if current != block and sha(current) != receipt.get("block_sha256") and not replace_conflicts:
+            raise ValueError("Local instructions conflicts; inspect the managed block or use --replace-conflicts with automatic backup.")
+        after = before[:start] + block + before[end:]
+    else:
+        if receipt.get("block_sha256") and not replace_conflicts:
+            raise ValueError("Managed instructions were removed locally; use --replace-conflicts to restore them.")
+        prefix = before or b""
+        # Adopt an exact manual copy without keeping a second copy of the same rules.
+        if prefix.replace(b"\r\n", b"\n").strip() == (source / "global/AGENTS.md").read_bytes().replace(b"\r\n", b"\n").strip():
+            prefix = b""
+        separator = b"" if not prefix or prefix.replace(b"\r\n", b"\n").endswith(b"\n\n") else (b"\n" if prefix.endswith(b"\n") else b"\n\n")
+        after = prefix + separator + block
+    changes = [Change(target, before, after, "instructions")] if before != after else []
+    record = {"owner": "ai-agents-harness", "target": str(target.resolve()), "source": str(source.resolve()),
+              "component": "instructions", "block_sha256": sha(block), "harness_version": source_version(source)}
+    path = receipt_path(target)
+    previous = path.read_bytes() if path.exists() else None
+    if previous != json_bytes(record):
+        changes.append(Change(path, previous, json_bytes(record), "receipt"))
+    return changes
+
+
+def hook_interpreter(source=ROOT):
+    candidate = source / (".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python")
+    # Preserve a venv interpreter symlink: resolving it can silently run the base environment.
+    return candidate.absolute() if candidate.is_file() else Path(sys.executable).absolute()
+
+
+def hook_definitions(source=ROOT):
+    """Kimi invokes a shell: POSIX quoting and forward slashes also work in Git Bash."""
+    python = hook_interpreter(source).as_posix()
+    result = {}
+    for name, event, matcher, timeout in (
+        ("protect_secrets", "PreToolUse", "Bash", 5),
+        ("lint_on_edit", "PostToolUse", "Edit|Write", 30),
+        ("git_gate", "PreToolUse", "Bash", 10),
+    ):
+        script = confined(source, f"hooks/{name}.py")
+        if not script.is_file():
+            raise ValueError("A required hook script is missing from the source repository.")
+        result[name] = {"event": event, "matcher": matcher,
+                        "command": shlex.join([python, "-E", "-s", "-X", "utf8", script.resolve().as_posix()]), "timeout": timeout}
+    return result
+
+
+def hook_source_hashes(source=ROOT):
+    hashes = {}
+    for path in sorted((source / "hooks").glob("*.py")):
+        path = confined(source, path.relative_to(source))
+        hashes[path.name] = sha(path.read_bytes())
+    return hashes
+
+
+def merge_hooks(doc, receipt, source=ROOT, *, replace_conflicts=False):
+    desired = hook_definitions(source)
+    previous = receipt.get("hooks", {})
+    entries = doc.get("hooks")
+    if entries is None or isinstance(entries, (list, tomlkit.items.Array)) and not entries:
+        entries = tomlkit.aot()
+        doc["hooks"] = entries
+    if not isinstance(entries, tomlkit.items.AoT):
+        raise ValueError("Kimi hooks must use [[hooks]] tables.")
+    remove = []
+    for name, old in previous.items():
+        matches = [index for index, entry in enumerate(entries) if entry.get("command") == old.get("command")]
+        if not matches and not replace_conflicts:
+            raise ValueError("Managed hook command was removed or edited locally; inspect it before using --replace-conflicts.")
+        for index in matches:
+            if dict(entries[index]) != old and not replace_conflicts:
+                raise ValueError("Local hook conflicts; inspect them or use --replace-conflicts with automatic backup.")
+            if name not in desired or dict(entries[index]) != desired[name] or len(matches) > 1:
+                remove.append(index)
+    for index in sorted(set(remove), reverse=True):
+        del entries[index]
+    for definition in desired.values():
+        matching = [entry for entry in entries if entry.get("command") == definition["command"]]
+        if matching:
+            if len(matching) != 1 or dict(matching[0]) != definition:
+                raise ValueError("An unmanaged hook uses the same command with different settings; resolve the conflict first.")
+            continue
+        table = tomlkit.table()
+        for key, value in definition.items():
+            table[key] = value
+        entries.append(table)
+    receipt.update({"hooks": desired, "hook_source": str(source.resolve()),
+                    "hook_interpreter": str(hook_interpreter(source)), "hook_files": hook_source_hashes(source),
+                    "hook_version": source_version(source)})
 
 
 def desired_files(root=ROOT):
@@ -119,7 +277,7 @@ def plan_copies(target, desired, *, replace_conflicts=False, source=ROOT):
         raise ValueError("Local skill conflicts; inspect them or use --replace-conflicts with automatic backup: "
                          + ", ".join(conflicts))
     receipt = {"owner": "ai-agents-harness", "target": str(target.resolve()), "source": str(source.resolve()),
-               "files": {k: sha(v) for k, v in desired.items()}}
+               "files": {k: sha(v) for k, v in desired.items()}, "harness_version": source_version(source)}
     receipt_file = receipt_path(target)
     before = receipt_file.read_bytes() if receipt_file.exists() else None
     if before != json_bytes(receipt):
@@ -131,31 +289,58 @@ def normalized_path(value):
     return os.path.normcase(str(Path(value).expanduser().resolve()))
 
 
-def plan_kimi(config, source=ROOT):
+def register_directory(doc, record, key, receipt_key, destination):
+    directories = doc.get(key, [])
+    if not isinstance(directories, (list, tomlkit.items.Array)) or any(not isinstance(p, str) for p in directories):
+        raise ValueError(f"Kimi {key} must be an array of paths.")
+    new = destination.resolve().as_posix()
+    previous = record.get(receipt_key)
+    updated = []
+    for value in directories:
+        if previous and normalized_path(value) == normalized_path(previous) and normalized_path(value) != normalized_path(new):
+            continue
+        if normalized_path(value) not in {normalized_path(item) for item in updated}:
+            updated.append(value)
+    if normalized_path(new) not in {normalized_path(item) for item in updated}:
+        updated.append(new)
+    if list(directories) != updated or key not in doc:
+        doc[key] = updated
+    record[receipt_key] = new
+
+
+def agent_source_hashes(source=ROOT):
+    hashes = {}
+    for path in sorted((source / "agents").rglob("*.md")):
+        path = confined(source, path.relative_to(source))
+        hashes[path.relative_to(source / "agents").as_posix()] = sha(path.read_bytes())
+    if not hashes:
+        raise ValueError("No custom agent profiles found in the source repository.")
+    return hashes
+
+
+def plan_kimi(config, source=ROOT, *, skills=True, hooks=False, agents=False, replace_conflicts=False):
     if config.is_symlink():
         raise ValueError("Kimi config is a symlink; configure its real parent using KIMI_CODE_HOME.")
     before = config.read_bytes() if config.exists() else None
     doc = tomlkit.parse(before.decode("utf-8-sig") if before is not None else "")
-    directories = doc.get("extra_skill_dirs", [])
-    if not isinstance(directories, (list, tomlkit.items.Array)) or any(not isinstance(p, str) for p in directories):
-        raise ValueError("Kimi extra_skill_dirs must be an array of paths.")
-    skill_dir = (source / "skills").resolve().as_posix()
-    old = read_receipt(config)
-    previous = old.get("skill_dir")
-    updated = [p for p in directories if not previous or normalized_path(p) != normalized_path(previous)
-               or normalized_path(p) == normalized_path(skill_dir)]
-    if normalized_path(skill_dir) not in {normalized_path(p) for p in updated}:
-        updated.append(skill_dir)
-    if list(directories) != updated or "extra_skill_dirs" not in doc:
-        doc["extra_skill_dirs"] = updated
+    record = read_receipt(config).copy()
+    if skills:
+        register_directory(doc, record, "extra_skill_dirs", "skill_dir", source / "skills")
+        record["skills_version"] = source_version(source)
+    if agents:
+        register_directory(doc, record, "extra_agent_dirs", "agent_dir", source / "agents")
+        record["agent_files"] = agent_source_hashes(source)
+        record["agents_version"] = source_version(source)
+    if hooks:
+        merge_hooks(doc, record, source, replace_conflicts=replace_conflicts)
     after = tomlkit.dumps(doc).encode("utf-8")
     # A real parse catches accidental nesting or invalid serialization before touching a live config.
     parsed = tomlkit.parse(after.decode("utf-8"))
-    if skill_dir not in parsed["extra_skill_dirs"] and normalized_path(skill_dir) not in {
-            normalized_path(p) for p in parsed["extra_skill_dirs"]}:
-        raise ValueError("Kimi registration validation failed.")
+    for enabled, key, folder in ((skills, "extra_skill_dirs", "skills"), (agents, "extra_agent_dirs", "agents")):
+        if enabled and normalized_path(source / folder) not in {normalized_path(p) for p in parsed[key]}:
+            raise ValueError("Kimi registration validation failed.")
     changes = [Change(config, before, after, "kimi-config")] if before != after else []
-    record = {"owner": "ai-agents-harness", "target": str(config.resolve()), "source": str(source.resolve()), "skill_dir": skill_dir}
+    record.update({"owner": "ai-agents-harness", "target": str(config.resolve()), "source": str(source.resolve())})
     path = receipt_path(config)
     previous_bytes = path.read_bytes() if path.exists() else None
     if previous_bytes != json_bytes(record):
@@ -221,30 +406,41 @@ def apply(changes):
     return backup
 
 
-def install(agents, *, dry_run=False, replace_conflicts=False, migrate_legacy=False, source=ROOT, user_home=None):
+def install(agents, *, dry_run=False, replace_conflicts=False, migrate_legacy=False, source=ROOT, user_home=None, components=None):
+    source = Path(source).resolve()
+    components = ["skills"] if components is None else list(components)
+    if not components or len(set(components)) != len(components) or set(components) - set(COMPONENTS):
+        raise ValueError("Choose each supported component at most once: skills, instructions, hooks, agents.")
     targets = agent_targets(user_home)
+    instructions = instruction_targets(user_home)
     if not agents:
-        agents = [name for name, target in targets.items() if target.parent.exists()]
+        agents = [name for name, target in targets.items() if target.parent.exists() or instructions[name].parent.exists()]
         if not agents:
             raise ValueError("No agent directories found. Choose --agents kimi claude codex explicitly.")
     if len(set(agents)) != len(agents) or set(agents) - targets.keys():
         raise ValueError("Choose each supported agent at most once.")
-    desired = desired_files(source)
-    if not any(path.endswith("/SKILL.md") for path in desired):
+    desired = desired_files(source) if "skills" in components else {}
+    if "skills" in components and not any(path.endswith("/SKILL.md") for path in desired):
         raise ValueError("No skills found in the source repository.")
-    plan = []
+    plan, unsupported = [], []
     for name in agents:
-        if name == "kimi":
-            plan += plan_kimi(targets[name], source)
-        else:
+        if name == "kimi" and set(components) & {"skills", "hooks", "agents"}:
+            plan += plan_kimi(targets[name], source, skills="skills" in components, hooks="hooks" in components,
+                              agents="agents" in components, replace_conflicts=replace_conflicts)
+        elif name != "kimi" and "skills" in components:
             plan += plan_copies(targets[name], desired, replace_conflicts=replace_conflicts, source=source)
+        if "instructions" in components:
+            plan += plan_instructions(instructions[name], source, replace_conflicts=replace_conflicts)
+        if name != "kimi":
+            unsupported.extend({"agent": name, "component": component, "reason": "kimi_only"}
+                               for component in components if component in ("hooks", "agents"))
     if migrate_legacy:
-        if "codex" not in agents:
-            raise ValueError("Legacy migration requires the codex target.")
+        if "codex" not in agents or "skills" not in components:
+            raise ValueError("Legacy migration requires the codex target and skills component.")
         plan += plan_legacy_codex(source, user_home)
     if len({str(c.path.resolve()) for c in plan}) != len(plan):
         raise ValueError("Agent destinations overlap; install them separately.")
     backup = None if dry_run else apply(plan)
-    return {"agents": agents, "dry_run": dry_run, "changes": len(plan),
+    return {"agents": agents, "components": components, "unsupported": unsupported, "dry_run": dry_run, "changes": len(plan),
             "actions": [{"kind": c.kind, "path": str(c.path)} for c in plan],
             "backup": str(backup) if backup else None}

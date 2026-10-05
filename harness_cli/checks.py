@@ -3,7 +3,9 @@
 import json
 import os
 import re
+import shlex
 import subprocess
+import tomllib
 
 import yaml
 
@@ -15,6 +17,68 @@ PATTERNS = {
     "provider_key": re.compile(rb"(?:ghp_|github_pat_|sk-proj-)[A-Za-z0-9_-]{20,}"),
     "private_key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 }
+ROLE_TOOLS = {"reviewer": {"Read", "Grep", "Glob"},
+              "implementer": {"Read", "Grep", "Glob", "Write", "Edit"}}
+
+
+def check_agent_profiles(root=ROOT):
+    """Validate maintained role capabilities; this is not a filesystem sandbox."""
+    findings = []
+    for path in sorted((root / "agents").glob("*.md")):
+        location = path.relative_to(root).as_posix()
+        try:
+            content = path.read_text(encoding="utf-8")
+            prefix, header, body = content.split("---", 2)
+            if prefix.strip() or not body.strip():
+                raise ValueError()
+            node = yaml.compose(header)
+            if not isinstance(node, yaml.MappingNode):
+                raise ValueError()
+            keys = [key.value for key, _ in node.value]
+            if len(keys) != len(set(keys)):
+                raise ValueError()
+            metadata = yaml.safe_load(header)
+            expected = ROLE_TOOLS[path.stem]
+            if (not isinstance(metadata, dict) or set(metadata) != {"name", "description", "tools", "subagents"}
+                    or metadata["name"] != path.stem
+                    or not isinstance(metadata["description"], str) or not metadata["description"].strip()
+                    or not isinstance(metadata["tools"], list)
+                    or any(not isinstance(tool, str) for tool in metadata["tools"])
+                    or len(metadata["tools"]) != len(expected) or set(metadata["tools"]) != expected
+                    or metadata["subagents"] != []):
+                raise ValueError()
+        except (OSError, UnicodeError, ValueError, KeyError, TypeError, yaml.YAMLError):
+            findings.append({"location": location, "rule": "invalid_agent_profile"})
+    return findings
+
+
+def check_hook_references(root=ROOT):
+    """Check template command references without executing shell code."""
+    path = root / "config" / "kimi" / "hooks.toml"
+    if not path.exists():
+        return []
+    location = path.relative_to(root).as_posix()
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        hooks = config["hooks"]
+        if not isinstance(hooks, list) or not hooks:
+            raise ValueError()
+        for hook in hooks:
+            if (not isinstance(hook, dict) or not isinstance(hook.get("command"), str)
+                    or not isinstance(hook.get("event"), str) or not hook["event"]
+                    or not isinstance(hook.get("matcher"), str) or not hook["matcher"]):
+                raise ValueError()
+            tokens = shlex.split(hook["command"])
+            scripts = [token[len("<REPO>/"):] for token in tokens if token.startswith("<REPO>/")]
+            if not scripts:
+                raise ValueError()
+            for script in scripts:
+                target = (root / script).resolve()
+                if not target.is_relative_to(root.resolve()) or target.suffix != ".py" or not target.is_file():
+                    raise ValueError()
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError, tomllib.TOMLDecodeError):
+        return [{"location": location, "rule": "invalid_hook_reference"}]
+    return []
 
 
 def private_values():
@@ -61,7 +125,7 @@ def scan_history(root=ROOT, refs=None):
 
 
 def check(root=ROOT, *, history=False, refs=None):
-    findings, names = [], set()
+    findings, names = check_agent_profiles(root) + check_hook_references(root), set()
     skills = sorted((root / "skills").glob("*/SKILL.md"))
     for path in skills:
         location = path.relative_to(root).as_posix()

@@ -28,3 +28,4 @@ jobs:
       # separately with --history before any explicit publication request.
       - run: python manage.py check
       - run: python manage.py eval
+      - run: python manage.py eval --mode routing

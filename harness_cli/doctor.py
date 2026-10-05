@@ -7,10 +7,9 @@ import shutil
 import subprocess
 import sys
 
-import tomlkit
-
 from . import __version__
-from .install import ROOT, agent_targets, desired_files, normalized_path, read_receipt
+from .capabilities import capabilities
+from .install import ROOT, agent_targets
 
 
 def binary_version(name):
@@ -29,37 +28,38 @@ def binary_version(name):
         return {"available": True, "version": "unavailable"}
 
 
-def doctor(root=ROOT, *, versions=True, user_home=None):
+def doctor(root=ROOT, *, versions=True, user_home=None, probes=True):
     sys.path.insert(0, str(root / "skills" / "_shared"))
     from bitrix_config import Config, ToolError
-    desired, targets = desired_files(root), agent_targets(user_home)
+    targets = agent_targets(user_home)
     report = {"harness_version": __version__, "python": sys.version.split()[0], "agents": {}, "warnings": []}
-    revision = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True)
-    report["git_revision"] = revision.stdout.strip() if revision.returncode == 0 else None
-    report["working_tree_dirty"] = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=root))
+    try:
+        revision = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, timeout=10)
+        report["git_revision"] = revision.stdout.strip() if revision.returncode == 0 else None
+        report["working_tree_dirty"] = bool(status.stdout) if status.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        report["git_revision"], report["working_tree_dirty"] = None, None
+        report["warnings"].append("git_inspection_unavailable")
+    feature_report = capabilities(root, user_home=user_home, probes=probes)
+    report["source_version"] = feature_report["source_version"]
+    report["warnings"].extend(feature_report["warnings"])
+    if feature_report["source_version"] is not None and feature_report["source_version"] != __version__:
+        report["warnings"].append("harness_version_mismatch")
     for name, target in targets.items():
         state = {"target": str(target), "exists": target.exists()}
         if versions:
             state["cli"] = binary_version(name)
-        if name == "kimi" and target.exists():
-            try:
-                doc = tomlkit.parse(target.read_text(encoding="utf-8-sig"))
-                directories = doc.get("extra_skill_dirs", [])
-                state["registered"] = normalized_path(root / "skills") in {normalized_path(p) for p in directories}
-                state["configured_directory_count"] = len(directories)
-                if not state["registered"]:
-                    report["warnings"].append("kimi_not_registered")
-            except (ValueError, TypeError):
-                state["registered"] = False
-                report["warnings"].append("kimi_invalid_config")
-        elif name != "kimi" and target.exists():
-            state["missing"] = [p for p in desired if not (target / p).is_file()]
-            state["different"] = [p for p, data in desired.items() if (target / p).is_file() and (target / p).read_bytes() != data]
-            receipt = read_receipt(target)
-            state["managed"] = bool(receipt)
-            state["obsolete_managed"] = [p for p in receipt.get("files", {}) if p not in desired and (target / p).exists()]
-            if state["missing"] or state["different"] or state["obsolete_managed"]:
-                report["warnings"].append(f"{name}_copy_drift")
+        state["features"] = feature_report["agents"][name]
+        skills = state["features"]["skills"]
+        # Retain the original summary keys for existing doctor consumers.
+        if name == "kimi":
+            state["registered"] = skills["configured"]
+            state["configured_directory_count"] = skills.get("configured_directory_count", 0)
+        else:
+            for key in ("missing", "different", "obsolete_managed"):
+                state[key] = skills.get(key, [])
+            state["managed"] = skills["managed"]
         report["agents"][name] = state
     legacy = Path(os.environ.get("CODEX_HOME", str(Path(user_home or Path.home()) / ".codex"))) / "skills"
     report["legacy_codex_duplicates"] = [p.parent.name for p in (root / "skills").glob("*/SKILL.md")

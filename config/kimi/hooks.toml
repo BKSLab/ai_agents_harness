@@ -1,22 +1,36 @@
 # Фрагмент для ~/.kimi-code/config.toml — хуки Kimi Code.
-# Скопируй блоки в конец своего config.toml и замени <REPO> на абсолютный
-# путь к клону ai_agents_harness (прямые слэши, например C:/work/...).
+# Установщик объединяет эти правила с существующей конфигурацией и ведёт
+# квитанцию владения. При ручной настройке замени <PYTHON> и <REPO> на
+# абсолютные пути (в Windows Git Bash — прямые слэши, например C:/work/...).
+# Не копируй плейсхолдеры буквально и не заменяй весь config.toml этим фрагментом.
 # Документация: https://www.kimi.com/code/docs/en/kimi-code-cli/customization/hooks.html
 #
 # Хуки fail-open: ошибка скрипта разрешает операцию. Это подсказки и
 # дополнительный барьер, а не единственная защита.
 
-# Блокирует чтение/отправку .env и ключей через shell (встроенные инструменты
-# и так отказывают, но Bash это обходит).
+# Распознаёт прямые чтения/отправку файлов с известными секретными именами.
+# .env.example и обычное использование окружения приложением разрешены.
+# Это неполный фильтр буквальных команд, не парсер всех shell и не sandbox.
 [[hooks]]
 event = "PreToolUse"
 matcher = "Bash"
-command = "python <REPO>/hooks/protect_secrets.py"
+command = "'<PYTHON>' -E -s -X utf8 '<REPO>/hooks/protect_secrets.py'"
 timeout = 5
 
-# После правки .py-файла прогоняет ruff и добавляет результат в контекст.
+# После правки .py-файла запускает ruff без исправлений: passed/failed/skipped/error.
+# Результат lint не является квитанцией тестов или независимого ревью.
 [[hooks]]
 event = "PostToolUse"
 matcher = "Edit|Write"
-command = "python <REPO>/hooks/lint_on_edit.py"
+command = "'<PYTHON>' -E -s -X utf8 '<REPO>/hooks/lint_on_edit.py'"
 timeout = 30
+
+# Проверяет сохранённые доказательства и точное разрешение для commit/push
+# активной задачи harness. В проектах без активной задачи разрешает команду.
+# Сложные распознанные shell-формы в управляемом проекте требуют отдельных
+# буквальных git-команд; псевдонимы и косвенные скрипты фильтр не изолирует.
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "'<PYTHON>' -E -s -X utf8 '<REPO>/hooks/git_gate.py'"
+timeout = 10
