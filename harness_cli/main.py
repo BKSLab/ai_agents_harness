@@ -27,7 +27,8 @@ def main(argv=None):
     check = commands.add_parser("check")
     check.add_argument("--history", action="store_true")
     check.add_argument("--ref", action="append")
-    commands.add_parser("operations")
+    operations = commands.add_parser("operations")
+    operations.add_argument("--service", choices=("bitrix", "gitlab"), default="bitrix")
     evaluate = commands.add_parser("eval")
     evaluate.add_argument("--submission", help="Grade structured decisions produced for the published scenarios.")
     evaluate.add_argument("--mode", choices=("decisions", "routing"), default="decisions")
@@ -91,15 +92,29 @@ def main(argv=None):
             from .publication import export_public
             result = export_public(args.output)
         else:
-            sys.path.insert(0, str(ROOT / "skills" / "_shared"))
-            from bitrix_config import Config
-            from bitrix_state import Journal
-            result = {"ok": True, "operations": Journal(Config.load()).recent()}
+            result = operation_history(args.service)
     except Exception as exc:
         message = str(exc) if type(exc) is ValueError else "Command failed; check local configuration and dependencies."
         result = {"ok": False, "error": type(exc).__name__, "message": message}
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1
+
+
+def operation_history(service):
+    """Read the selected service's local journal; never call its API."""
+    sys.path.insert(0, str(ROOT / "skills" / "_shared"))
+    from bitrix_config import ToolError
+    if service == "gitlab":
+        from gitlab_config import Config
+        from gitlab_state import Journal
+    else:
+        from bitrix_config import Config
+        from bitrix_state import Journal
+    try:
+        config = Config.load()
+        return {"ok": True, "operations": config.redact(Journal(config).recent())}
+    except ToolError as exc:
+        return {"ok": False, "error": exc.as_dict()}
 
 
 def task_command(args):

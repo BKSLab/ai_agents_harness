@@ -1,29 +1,21 @@
 ---
 name: frontend-design
-description: "Практические правила для создания выразительного, аккуратного и production-ready интерфейса. Используй при проектировании или доработке UI, если нет более строгого проектного дизайн-гайда."
+description: "Проектирование, доработка и визуальное ревью пользовательского интерфейса с учётом дизайн-гайда проекта."
 ---
 
-# Frontend Design
+Следуй соглашениям продукта и проекта; эти рекомендации заполняют пробелы, а не заменяют выбранный пользователем стиль.
 
-Use this skill when building or reviewing user-facing UI. Follow repository conventions and active developer instructions first; use this skill to fill gaps.
+## Интерфейс
 
-## Core Principles
+- Создавай рабочий пользовательский сценарий с реальными состояниями и действиями.
+- Подбирай плотность и выразительность под продукт: рабочие инструменты требуют компактности и ясности; игры и творческие продукты допускают больше эксперимента.
+- Подбирай элементы под действие: кнопки для команд, переключатели для бинарных настроек, сегменты и вкладки для режимов, поля и ползунки для значений.
+- Используй карточки для повторяющихся объектов и самостоятельных блоков; избегай вложенных карточек без функциональной причины.
+- Сохраняй читаемую типографику и устойчивую раскладку. Не связывай размер шрифта напрямую с шириной окна.
+- Задавай responsive-ограничения, размеры сетки и пропорции; проверяй переполнение и наложение текста.
 
-- Build the actual usable experience, not a marketing placeholder.
-- Match the product domain: operational tools should be dense, restrained, and efficient; games and creative tools can be more expressive.
-- Use real controls for real operations: icon buttons for tools, segmented controls for modes, toggles for binary settings, sliders or numeric inputs for values, tabs for views.
-- Keep cards for repeated items, modals, and genuinely framed tools. Do not nest cards.
-- Keep typography stable and readable. Do not scale font size directly with viewport width.
-- Make layout resilient with explicit dimensions, aspect ratios, grid tracks, and responsive constraints.
-- Check that text never overlaps or overflows its container on desktop and mobile.
+## Визуальные средства и проверка
 
-## Visual Direction
+Выбирай осмысленную палитру и изображения, относящиеся к продукту. Декоративные градиенты, bokeh и прочий шум добавляй только при связи с выбранным стилем. Используй существующую библиотеку иконок; при свободном выборе подходит `lucide`.
 
-- Avoid one-note palettes dominated by a single hue family.
-- Avoid decorative gradient blobs, bokeh, or unrelated visual noise.
-- Use relevant images or real product/place/object visuals when a website needs assets.
-- Use existing icon libraries when present; prefer `lucide` icons where available.
-
-## Verification
-
-Before finishing UI work, run the app when feasible and inspect desktop and mobile states. Verify that controls are reachable, content fits, and important states are represented.
+Когда это возможно, запусти интерфейс и проверь desktop/mobile состояния: доступность элементов, размещение контента и важные состояния. Если визуальная проверка недоступна, укажи этот предел.

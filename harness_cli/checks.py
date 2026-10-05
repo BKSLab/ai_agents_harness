@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import tomllib
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -14,7 +15,7 @@ from .install import ROOT, home
 PATTERNS = {
     "portal_address": re.compile(rb"https?://(?!apidocs\.|helpdesk\.|www\.)[A-Za-z0-9_-]+\.bitrix24\.[a-z.]+"),
     "literal_webhook": re.compile(rb"https?://[^\s\"'<>]+/rest/(?:api/)?[0-9]+/[A-Za-z0-9_-]{10,}"),
-    "provider_key": re.compile(rb"(?:ghp_|github_pat_|sk-proj-)[A-Za-z0-9_-]{20,}"),
+    "provider_key": re.compile(rb"(?:ghp_|github_pat_|sk-proj-|glpat-)[A-Za-z0-9_.-]{20,}"),
     "private_key": re.compile(rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
 }
 ROLE_TOOLS = {"reviewer": {"Read", "Grep", "Glob"},
@@ -89,10 +90,17 @@ def private_values():
         if not isinstance(data, list) or any(not isinstance(v, str) or len(v) < 4 for v in data):
             raise ValueError("Publication denylist must contain strings of at least four characters.")
         values.extend(data)
-    for name in ("BITRIX_PORTAL_URL", "BITRIX_WEBHOOK_TOKEN", "BITRIX_WEBHOOK"):
+    for name in ("BITRIX_PORTAL_URL", "BITRIX_WEBHOOK_TOKEN", "BITRIX_WEBHOOK", "GITLAB_HOST", "GITLAB_TOKEN"):
         value = os.environ.get(name)
         if value and len(value) >= 8:
             values.append(value)
+    try:
+        parsed = urlsplit(os.environ.get("GITLAB_HOST", ""))
+        for host in {parsed.netloc, parsed.hostname} - {None, ""}:
+            if len(host) >= 4:
+                values.append(host)
+    except ValueError:
+        pass
     return [v.encode("utf-8") for v in values]
 
 

@@ -4,7 +4,6 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -83,8 +82,8 @@ def main(argv=None):
     definition = (ROOT / "evals" / "kimi-decisions.md").read_text(encoding="utf-8")
     agent_file = directory / "agent.md"
     agent_file.write_text(definition + "\n" + skills, encoding="utf-8")
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith(("BITRIX_", "GH_", "GITHUB_"))}
+    from harness_cli.redaction import model_environment
+    env = model_environment()
     command = [executable, "--agent-file", str(agent_file), "--model", chosen_model,
                "--skills-dir", str(directory / "empty-skills"),
                "--prompt", "Return the JSON decisions for these independent scenarios:\n" + cases,

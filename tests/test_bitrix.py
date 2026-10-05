@@ -261,3 +261,13 @@ def test_missing_environment_is_json_without_traceback():
     result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 2 and not result.stderr
     assert json.loads(result.stdout)["error"]["code"] == "CONFIG_MISSING"
+
+
+def test_invalid_ca_bundle_is_a_configuration_error_before_network(monkeypatch, tmp_path, capsys, config):
+    config.ca_bundle = str(tmp_path / "missing-ca.pem")
+    monkeypatch.setattr(Config, "load", lambda: config)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *args: pytest.fail("TLS must fail before transport"))
+    assert main("list-tasks", []) == 2
+    output = capsys.readouterr()
+    assert not output.err
+    assert json.loads(output.out)["error"]["code"] == "TLS_CONFIG"

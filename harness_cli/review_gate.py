@@ -1,7 +1,6 @@
 """One bounded reviewer invocation; tests run by the controller on a verified snapshot."""
 
 import json
-import os
 from pathlib import Path
 import shutil
 import uuid
@@ -13,6 +12,7 @@ from . import tasks
 from .artifacts import inventory, digest, run_command
 from .install import ROOT, agent_targets, atomic_write, json_bytes
 from .kimi_transport import assistant_reply, strict_json
+from .redaction import model_environment
 from .task_schemas import REVIEW, UniqueLoader, validate
 
 
@@ -95,8 +95,7 @@ def review_gate(task_id, project, model, *, timeout=180, executable=None):
         raise ValueError("Three model review attempts used for this plan; escalate before another invocation.")
     state.setdefault("review_gate_attempts", {})[state["plan_hash"]] = attempts + 1
     store.save(state, "model_review_started", {"model": model, "attempt": attempts + 1})
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith("BITRIX_") and key not in ("GH_TOKEN", "GITHUB_TOKEN")}
+    env = model_environment()
     command = [executable, "--agent-file", str(ROOT / "agents" / "reviewer.md"), "--model", model,
                "--skills-dir", str(directory / "empty-skills"), "--prompt", json.dumps(instruction),
                "--output-format", "stream-json"]

@@ -1,33 +1,24 @@
 ---
 name: git-commit-push
-description: "Безопасная подготовка git-коммита и push: проверка статуса, выбор только нужных файлов, базовые проверки, коммит по шаблону и отправка. Используй, когда пользователь явно просит закоммитить и запушить изменения."
+description: "Подготовка и выполнение git-коммита и/или push по запросу пользователя или в рамках конкретного ранее выданного разрешения."
 ---
 
-# Git Commit Push
+Выполняй только запрошенные действия: commit не подразумевает push, а push не требует нового коммита. Разрешение относится к текущему репозиторию, объёму файлов, ветке и, для push, точному remote/ветке. Уже данное разрешение не переспрашивай.
 
-Use this skill only when the user explicitly asks to commit and push.
+## Подготовка
 
-## Safety Rules
+- Прочитай `git status --short`, текущую ветку и diff. Сверь фактический репозиторий и цель отправки с разрешением; credentials из remote URL не выводи.
+- Выбери только файлы и изменения текущей задачи. Чужие правки, включая уже staged, сохрани; при пересечении выбери способ изоляции без сброса рабочего дерева или индекса.
+- Проверь staged diff на случайные секреты, отладочный вывод, временные и крупные сгенерированные файлы.
+- Используй актуальные результаты нужных проверок. Запускай недостающие или затронутые новыми изменениями проверки; объясни `failed`, `skipped` и `error`.
+- В управляемой задаче соблюдай Git-гейт harness и записи разрешений. В обычном Git-проекте CLI harness не обязателен.
 
-- Inspect `git status --short` first.
-- Stage only files that belong to the current user request. Do not stage unrelated dirty files unless the user explicitly asks to include everything.
-- Never revert user changes unless explicitly requested.
-- Before committing, check for obvious secrets, debug prints, temporary files, and accidental large/generated files.
-- Use non-interactive git commands.
+## Выполнение
 
-## Procedure
+Для разрешённого коммита подготовь выбранные изменения через `git add -- <files>`, проверь `git diff --cached` и выполни неинтерактивный `git commit`. Если в индексе есть посторонние изменения, обычный коммит всего индекса не подходит.
 
-1. Run `git status --short` and identify intended files.
-2. Run relevant tests or linters for the changed area when practical.
-3. Stage intended files with `git add -- <file1> <file2>`.
-4. Review staged diff with `git diff --cached`.
-5. Follow the repository's commit convention. If none exists, use a concise message describing the change. Include a task ID only when a real task ID is known; otherwise omit that prefix:
+Следуй соглашению репозитория о сообщениях. При отсутствии соглашения используй краткое `<type>: <описание>`, где type — `feat`, `fix`, `refactor`, `test`, `docs` или `chore`. Префикс `[BITRIX_ID]` добавляй только при реально известном ID задачи.
 
-```text
-[BITRIX_ID] <type>: <описание>
-```
+Перед разрешённым push проверь отправляемые коммиты и явную цель, затем выполни `git push <remote> HEAD:refs/heads/<branch>` для текущей ветки. Если пользователь назвал другую исходную ветку, укажи её явно. Не используй неявные upstream-настройки как основание для выбора цели; force push и другая цель не входят в обычное разрешение.
 
-Use type: `feat`, `fix`, `refactor`, `test`, `docs`, or `chore`.
-
-6. Run `git push`.
-7. Report commit hash, pushed branch, and any checks that were skipped.
+Сообщи hash созданного коммита, подтверждённую цель push и результаты проверок — только для действий, которые действительно состоялись.

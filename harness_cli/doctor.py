@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 from . import __version__
 from .capabilities import capabilities
@@ -67,7 +68,8 @@ def doctor(root=ROOT, *, versions=True, user_home=None, probes=True):
     if report["legacy_codex_duplicates"]:
         report["warnings"].append("legacy_codex_duplicates")
     report["environment_present"] = {key: bool(os.environ.get(key)) for key in
-        ("BITRIX_PORTAL_URL", "BITRIX_WEBHOOK_USER_ID", "BITRIX_WEBHOOK_TOKEN", "BITRIX_CA_BUNDLE", "BITRIX_WEBHOOK")}
+        ("BITRIX_PORTAL_URL", "BITRIX_WEBHOOK_USER_ID", "BITRIX_WEBHOOK_TOKEN", "BITRIX_CA_BUNDLE", "BITRIX_WEBHOOK",
+         "GITLAB_HOST", "GITLAB_TOKEN", "GITLAB_CA_BUNDLE")}
     try:
         config = Config.load()
         report["bitrix"] = {"configured": True, "timeout_seconds": config.timeout,
@@ -76,5 +78,23 @@ def doctor(root=ROOT, *, versions=True, user_home=None, probes=True):
     except ToolError as exc:
         report["bitrix"] = {"configured": False, "error_code": exc.code}
         report["warnings"].append("bitrix_not_configured_in_this_process")
+    from gitlab_config import Config as GitLabConfig
+    from gitlab_http import Client as GitLabClient
+    configured = any(os.environ.get(key) for key in
+                     ("GITLAB_HOST", "GITLAB_TOKEN", "GITLAB_PROFILE", "GITLAB_CA_BUNDLE"))
+    configured |= os.environ.get("GITLAB_ALLOW_INSECURE_HTTP") == "1"
+    report["gitlab"] = {"configured": False, "status": "not_configured", "api_probed": False}
+    if configured:
+        try:
+            config = GitLabConfig.load()
+            GitLabClient(config)  # Construct TLS context only; no API calls.
+            transport = urlsplit(config.host).scheme
+            report["gitlab"].update(configured=True, status="configured", timeout_seconds=config.timeout,
+                                    read_retries=config.read_retries, transport=transport,
+                                    tls_verification=transport == "https",
+                                    profile_projects=len(config.profile.get("gitlab_projects", {})))
+        except ToolError as exc:
+            report["gitlab"].update(status="error", error_code=exc.code)
+            report["warnings"].append("gitlab_configuration_invalid")
     report["ok"] = not report["warnings"]
     return report

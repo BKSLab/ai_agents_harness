@@ -1,59 +1,25 @@
 ---
 name: next-js
-description: "Next.js App Router reference skill for architecture, rendering, data fetching, routing, styling, auth, testing, and deployment. Use when building or reviewing Next.js applications."
+description: "Разработка и ревью приложений Next.js App Router: архитектура, рендеринг, данные, маршруты, авторизация, тесты и развёртывание."
 ---
 
-# Next.js
+Сначала прочитай зависимости и соглашения проекта, затем только относящиеся к задаче references. Примеры не предписывают обновлять Next.js, менять библиотеку авторизации или развёртывать приложение.
 
-Use this skill for Next.js App Router work. Read only the relevant references for the user's task before acting.
+## Материалы по задаче
 
-## Reference Routing
+| Область | References |
+|---|---|
+| Архитектура | [App Router](references/architecture/app-router.md), [структура проекта](references/architecture/project-structure.md), [route groups](references/architecture/route-groups.md) |
+| Рендеринг | [server components](references/rendering/server-components.md), [client components](references/rendering/client-components.md), [static/dynamic](references/rendering/static-dynamic.md), [streaming](references/rendering/streaming.md) |
+| Данные | [server fetching](references/data-fetching/server-fetching.md), [server actions](references/data-fetching/server-actions.md), [cache/revalidation](references/data-fetching/cache-revalidation.md), [порядок запросов](references/data-fetching/parallel-sequential.md) |
+| Маршруты | [dynamic routes](references/routing/dynamic-routes.md), [route handlers](references/routing/route-handlers.md), [middleware](references/routing/middleware.md), [intercepting routes](references/routing/intercepting-routes.md) |
+| Стили | [Tailwind](references/styling/tailwind-css.md), [CSS Modules](references/styling/css-modules.md), [шрифты и изображения](references/styling/fonts-images.md) |
+| Авторизация | [NextAuth](references/auth/next-auth.md), [middleware auth](references/auth/middleware-auth.md), [server session](references/auth/server-session.md) |
+| Тесты | [component testing](references/testing/component-testing.md), [Jest](references/testing/jest-testing.md), [Playwright](references/testing/playwright.md) |
+| Развёртывание | [Vercel](references/deployment/vercel.md), [Docker](references/deployment/docker.md), [Edge Runtime](references/deployment/edge-runtime.md) |
 
-Architecture:
-- `references/architecture/app-router.md`
-- `references/architecture/project-structure.md`
-- `references/architecture/route-groups.md`
+## Применение
 
-Rendering:
-- `references/rendering/server-components.md`
-- `references/rendering/client-components.md`
-- `references/rendering/static-dynamic.md`
-- `references/rendering/streaming.md`
+Сохраняй границы Server Components; добавляй Client Components для состояния браузера, эффектов и обработчиков событий. Взаимозависимые запросы выполняй последовательно, независимые можно выполнять параллельно.
 
-Data fetching:
-- `references/data-fetching/server-fetching.md`
-- `references/data-fetching/server-actions.md`
-- `references/data-fetching/cache-revalidation.md`
-- `references/data-fetching/parallel-sequential.md`
-
-Routing:
-- `references/routing/dynamic-routes.md`
-- `references/routing/route-handlers.md`
-- `references/routing/middleware.md`
-- `references/routing/intercepting-routes.md`
-
-Styling:
-- `references/styling/tailwind-css.md`
-- `references/styling/css-modules.md`
-- `references/styling/fonts-images.md`
-
-Authentication:
-- `references/auth/next-auth.md`
-- `references/auth/middleware-auth.md`
-- `references/auth/server-session.md`
-
-Testing:
-- `references/testing/component-testing.md`
-- `references/testing/jest-testing.md`
-- `references/testing/playwright.md`
-
-Deployment:
-- `references/deployment/vercel.md`
-- `references/deployment/docker.md`
-- `references/deployment/edge-runtime.md`
-
-## Working Rules
-
-- Prefer existing project conventions over generic examples.
-- Preserve Server Component boundaries; add Client Components only where browser state, effects, or event handlers are needed.
-- Treat current framework behavior as time-sensitive; when exact Next.js version behavior matters, verify with local dependencies or official docs.
+Поведение кеша, маршрутов и API зависит от версии. Когда это влияет на решение, сверь примеры с установленными зависимостями и официальной документацией. Команды установки, публикации и работы с окружением в references — примеры для соответствующей задачи, а не самостоятельное разрешение на внешнее действие.

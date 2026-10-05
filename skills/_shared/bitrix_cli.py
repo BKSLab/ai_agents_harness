@@ -242,7 +242,7 @@ def main(command, argv=None, *, client_factory=Client, journal_factory=Journal):
         code = 0
     except ToolError as exc:
         output = {"ok": False, "error": exc.as_dict()}
-        code = 2 if exc.code in ("INVALID_INPUT", "CONFIG_MISSING", "CONFIG_ERROR", "OPERATION_ID_REQUIRED") else 1
+        code = 2 if exc.code in ("INVALID_INPUT", "CONFIG_MISSING", "CONFIG_ERROR", "OPERATION_ID_REQUIRED", "TLS_CONFIG") else 1
     except Exception:
         # This is the CLI boundary: never leak request URLs through an unexpected traceback.
         output = {"ok": False, "error": {"code": "LOCAL_ERROR", "message": "Tool failed locally; inspect configuration and the operation journal.",

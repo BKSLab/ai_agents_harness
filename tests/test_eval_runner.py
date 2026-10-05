@@ -109,6 +109,8 @@ def test_explicit_model_mode_and_bounded_runner_recorded(tmp_path, model_process
     monkeypatch.setenv("BITRIX_WEBHOOK_TOKEN", "synthetic-private-fixture")
     monkeypatch.setenv("GH_TOKEN", "synthetic-private-fixture")
     monkeypatch.setenv("GITHUB_OTHER_SECRET", "synthetic-private-fixture")
+    monkeypatch.setenv("GITLAB_TOKEN", "synthetic-private-fixture")
+    monkeypatch.setenv("GITLAB_HOST", "https://git.example.invalid")
     code, directory, report = run_evaluation(tmp_path, "--model", "alpha", "--admission", "--timeout", "37")
     assert code == 0 and report["ok"] and report["admission"]["qualified"]
     assert report["model"] == "alpha" and report["model_selection"] == "explicit"
@@ -123,7 +125,7 @@ def test_explicit_model_mode_and_bounded_runner_recorded(tmp_path, model_process
     assert call["argv"][call["argv"].index("--output-format") + 1] == "stream-json"
     assert call["stdout_limit"] == 2_000_000
     assert call["root"] == directory and call["output_path"] == directory / "model-output.json"
-    assert not any(key.startswith(("BITRIX_", "GH_", "GITHUB_")) for key in call["env"])
+    assert not any(key.startswith(("BITRIX_", "GITLAB_", "GH_", "GITHUB_")) for key in call["env"])
     assert not (directory / "stdout.txt").exists() and not (directory / "stderr.txt").exists()
     assert list((directory / "empty-skills").iterdir()) == []
     assert "synthetic-private-fixture" not in (directory / "report.json").read_text(encoding="utf-8")

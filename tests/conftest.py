@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "skills" / "_shared
 def private_environment(monkeypatch, tmp_path):
     import os
     for key in list(os.environ):
-        if key.startswith("BITRIX_") or key in ("KIMI_CODE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+        if key.startswith(("BITRIX_", "GITLAB_")) or key in ("KIMI_CODE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
             monkeypatch.delenv(key)
     monkeypatch.setenv("HARNESS_HOME", str(tmp_path / "state"))
 

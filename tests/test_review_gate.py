@@ -190,6 +190,8 @@ def test_approved_review_is_bound_to_controller_receipt_snapshot_and_selected_mo
     monkeypatch.setenv("BITRIX_WEBHOOK_TOKEN", "synthetic-private-fixture")
     monkeypatch.setenv("GH_TOKEN", "synthetic-github-fixture")
     monkeypatch.setenv("GITHUB_TOKEN", "synthetic-github-fixture")
+    monkeypatch.setenv("GITLAB_TOKEN", "synthetic-gitlab-fixture")
+    monkeypatch.setenv("GITLAB_HOST", "https://git.example.invalid")
     report = run_review(project)
     assert report["ok"] and report["status"] == "approved"
     assert len(calls) == 1
@@ -201,7 +203,7 @@ def test_approved_review_is_bound_to_controller_receipt_snapshot_and_selected_mo
     assert Path(argv[argv.index("--agent-file") + 1]).name == "reviewer.md"
     assert list(Path(argv[argv.index("--skills-dir") + 1]).iterdir()) == []
     assert call["root"] != project and call["timeout"] == 30
-    assert not any(key.startswith("BITRIX_") or key in {"GH_TOKEN", "GITHUB_TOKEN"} for key in call["env"])
+    assert not any(key.startswith(("BITRIX_", "GITLAB_", "GH_", "GITHUB_")) for key in call["env"])
     required = call["instruction"]["required_ids"]
     receipt_path = Path(call["instruction"]["verification_receipt"])
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))

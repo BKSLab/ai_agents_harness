@@ -1,18 +1,12 @@
 ---
 name: bitrix-update-task
-description: "Изменение полей задачи Bitrix24 по запросу пользователя."
+description: "Изменение полей задачи Bitrix24 по запросу пользователя или в рамках разрешённого процесса."
 ---
 
-Перед заменой DESCRIPTION прочитай текущее описание и сохрани нужные пользователю части. JSON-файл содержит только изменяемые UPPERCASE-поля: TITLE, DESCRIPTION, RESPONSIBLE_ID, PRIORITY, DEADLINE, GROUP_ID, PARENT_ID, AUDITORS, ACCOMPLICES. Не перезаписывай остальные поля.
+Перед заменой `DESCRIPTION` прочитай текущее описание и сохрани нужные пользователю части. JSON содержит только изменяемые UPPERCASE-поля: `TITLE`, `DESCRIPTION`, `RESPONSIBLE_ID`, `PRIORITY`, `DEADLINE`, `GROUP_ID`, `PARENT_ID`, `AUDITORS`, `ACCOMPLICES`. Остальные поля не перезаписывай.
 
-Прочитай [контракт инструментов](../_shared/CONTRACT.md) перед первым вызовом Bitrix в сессии. Он описывает конфигурацию, JSON-ответы и повтор операций записи.
-
-Запусти [scripts/update_task.py](scripts/update_task.py) через доступный shell. Путь разрешай относительно этого SKILL.md; текущий рабочий каталог может быть другим. Не предполагается инструмент с конкретным именем вроде Bash.
-
-Пример аргументов (замени путь скрипта на разрешённый абсолютный путь):
+Перед первым вызовом прочитай [общий контракт CLI](../_shared/CONTRACT.md). Запуск: [scripts/update_task.py](scripts/update_task.py).
 
 ```text
-python scripts/update_task.py <task-id> --input fields.json --operation-id <stable-id>
+python "<skill-dir>/scripts/update_task.py" <task-id> --input "<absolute-path>/fields.json" --operation-id <stable-id>
 ```
-
-Не передавай секреты или адрес портала в аргументах. Текст пользователя передавай через --input, без подстановки в shell-команду. Для чтения используй только существующие права; для записи основанием служит запрос пользователя или ранее разрешённый сценарий, повторное подтверждение этого же действия не требуется.
