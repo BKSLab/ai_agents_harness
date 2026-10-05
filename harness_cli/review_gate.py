@@ -12,6 +12,7 @@ import yaml
 from . import tasks
 from .artifacts import inventory, digest, run_command
 from .install import ROOT, agent_targets, atomic_write, json_bytes
+from .kimi_transport import assistant_reply, strict_json
 from .task_schemas import REVIEW, UniqueLoader, validate
 
 
@@ -98,20 +99,21 @@ def review_gate(task_id, project, model, *, timeout=180, executable=None):
            if not key.startswith("BITRIX_") and key not in ("GH_TOKEN", "GITHUB_TOKEN")}
     command = [executable, "--agent-file", str(ROOT / "agents" / "reviewer.md"), "--model", model,
                "--skills-dir", str(directory / "empty-skills"), "--prompt", json.dumps(instruction),
-               "--output-format", "text"]
-    result = run_command(command, packet["path"], timeout, directory / "model-output.json", env=env)
+               "--output-format", "stream-json"]
+    result = run_command(command, packet["path"], timeout, directory / "model-output.json",
+                         env=env, stdout_limit=2_000_000)
     if result["status"] != "passed":
         return {"ok": False, "status": "blocked", "reason": "reviewer_process_failed", "model": model,
                 "process": result, "artifacts": str(directory)}
     try:
-        output = json.loads((directory / "model-output.json").read_text(encoding="utf-8"))
+        output = strict_json((directory / "model-output.json").read_text(encoding="utf-8"))
         if not isinstance(output, dict) or not isinstance(output.get("stdout"), str):
             raise ValueError("Reviewer output is missing or malformed.")
         if output.get("stdout_truncated") is not False:
             raise ValueError("Reviewer output exceeded its limit.")
         if digest(inventory(Path(packet["path"]))) != packet["fingerprint"]:
             raise ValueError("Reviewer changed snapshot files.")
-        verdict = parse_verdict(output["stdout"])
+        verdict = parse_verdict(assistant_reply(output["stdout"], allowed_tools=("Read", "Grep", "Glob")))
         if verdict["reviewer"] != model:
             raise ValueError("Reviewer identity must match the explicitly selected model alias.")
         atomic_write(directory / "verdict.json", json_bytes(verdict))

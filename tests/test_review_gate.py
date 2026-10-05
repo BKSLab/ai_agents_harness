@@ -16,6 +16,26 @@ MODEL = "fixture-review-model"
 TASK_ID = "review-fixture"
 
 
+def kimi_stream(content, before_reply=()):
+    events = [
+        {"role": "meta", "type": "system.version", "version": "2.1.1"},
+        *before_reply,
+        {"role": "assistant", "content": content},
+        {"role": "meta", "type": "session.resume_hint", "session_id": "session_fixture",
+         "command": "kimi -r session_fixture", "content": "To resume..."},
+    ]
+    return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+def tool_stream(content, tool="Read"):
+    arguments = {"path": "module.py"} if tool == "Read" else {"command": "printf fixture"}
+    return kimi_stream(content, [
+        {"role": "assistant", "tool_calls": [{"type": "function", "id": "tool_fixture",
+         "function": {"name": tool, "arguments": json.dumps(arguments)}}]},
+        {"role": "tool", "tool_call_id": "tool_fixture", "content": "1\tVALUE = 2"},
+    ])
+
+
 def verdict(required_ids=None):
     return {
         "schema_version": 1,
@@ -75,15 +95,15 @@ def model_process(monkeypatch):
     calls = []
     behavior = {"status": "passed", "exit_code": 0, "reason": None}
 
-    def run(argv, root, timeout, output_path, *, env=None):
+    def run(argv, root, timeout, output_path, *, env=None, stdout_limit=32768):
         instruction = json.loads(argv[argv.index("--prompt") + 1])
         call = {"argv": argv, "root": Path(root), "timeout": timeout, "output_path": Path(output_path),
-                "instruction": instruction, "env": env}
+                "instruction": instruction, "env": env, "stdout_limit": stdout_limit}
         calls.append(call)
         answer = verdict(instruction["required_ids"])
         if "mutate_answer" in behavior:
             behavior["mutate_answer"](answer, call)
-        output = {"stdout": json.dumps(answer), "stderr": "",
+        output = {"stdout": behavior.get("stream", kimi_stream)(json.dumps(answer)), "stderr": "",
                   "stdout_truncated": False, "stderr_truncated": False}
         if "output" in behavior:
             replacement = behavior["output"]
@@ -176,6 +196,8 @@ def test_approved_review_is_bound_to_controller_receipt_snapshot_and_selected_mo
     call = calls[0]
     argv = call["argv"]
     assert argv[argv.index("--model") + 1] == MODEL
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    assert call["stdout_limit"] == 2_000_000
     assert Path(argv[argv.index("--agent-file") + 1]).name == "reviewer.md"
     assert list(Path(argv[argv.index("--skills-dir") + 1]).iterdir()) == []
     assert call["root"] != project and call["timeout"] == 30
@@ -191,6 +213,32 @@ def test_approved_review_is_bound_to_controller_receipt_snapshot_and_selected_mo
     assert receipt_path.is_relative_to(tasks.Store(project).directory(TASK_ID))
     assert not receipt_path.is_relative_to(project)
     assert tasks.status(TASK_ID, project)["ready"]
+
+
+def test_review_accepts_completed_read_cycle_before_bound_verdict(project, model_process):
+    calls, behavior = model_process
+    behavior["stream"] = tool_stream
+    report = run_review(project)
+    assert report["ok"] and report["status"] == "approved" and len(calls) == 1
+    state = tasks.Store(project).load(TASK_ID)
+    assert state["reviews"][-1]["verification_id"] == calls[0]["instruction"]["required_ids"]["verification_id"]
+
+
+@pytest.mark.parametrize("stream", [
+    lambda content: content,
+    lambda content: "• " + content,
+    lambda content: kimi_stream(content) + "{broken-jsonl\n",
+    lambda content: tool_stream(content, tool="Bash"),
+    lambda content: json.dumps({"role": "meta", "type": "session.resume_hint",
+                               "session_id": "session_fixture", "command": "kimi -r session_fixture",
+                               "content": content}) + "\n",
+], ids=["raw-verdict-not-a-stream", "terminal-transcript", "damaged-tail", "unexpected-tool", "meta-only-verdict"])
+def test_invalid_kimi_stream_cannot_approve_an_otherwise_bound_verdict(project, model_process, stream):
+    calls, behavior = model_process
+    behavior["stream"] = stream
+    report = run_review(project)
+    assert not report["ok"] and report["status"] == "blocked" and len(calls) == 1
+    assert_no_approval(project)
 
 
 @pytest.mark.parametrize("status,exit_code,reason", [
@@ -209,7 +257,7 @@ def test_non_successful_process_cannot_approve_even_with_approved_stdout(project
     None, "{broken-json", [], {}, lambda output: {"stdout": output["stdout"]},
     {"stdout": {}, "stdout_truncated": False}, {"stdout": "", "stdout_truncated": False},
     lambda output: {**output, "stdout_truncated": True},
-    {"stdout": '{"status":"approved"}', "stdout_truncated": False},
+    {"stdout": kimi_stream('{"status":"approved"}'), "stdout_truncated": False},
 ], ids=["missing-log", "invalid-json", "list-envelope", "empty-envelope", "missing-truncation-flag",
         "wrong-stdout-type", "empty-stdout", "truncated-valid-approval", "incomplete-verdict"])
 def test_missing_truncated_or_malformed_model_output_blocks_without_approval(project, model_process, output):

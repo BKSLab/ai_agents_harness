@@ -11,7 +11,8 @@ def redact_credentials(text):
             name, re.I,
         ):
             text = text.replace(value, "[REDACTED]")
-    text = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+:[^\s/@]+@", r"\1[REDACTED]@", text)
+    text = re.sub(r"(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*://)[^\s/:@]+:[^\s/@]+@",
+                  r"\1[REDACTED]@", text)
     text = re.sub(r"(?i)(?<![A-Za-z0-9_])(?:sk-|gh[pousr]_)[A-Za-z0-9_-]{16,}", "[REDACTED]", text)
     text = re.sub(r"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+", r"\1=[REDACTED]", text)
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)

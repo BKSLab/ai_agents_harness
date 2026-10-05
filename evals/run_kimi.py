@@ -16,20 +16,8 @@ sys.path.insert(0, str(ROOT))
 
 # Direct script execution needs the checkout import path established above.
 from harness_cli.artifacts import run_command  # noqa: E402
+from harness_cli.kimi_transport import assistant_reply, reject_constant, unique_object  # noqa: E402
 from harness_cli.review_gate import model_aliases  # noqa: E402
-
-
-def unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("Model output contains duplicate object keys.")
-        result[key] = value
-    return result
-
-
-def reject_constant(value):
-    raise ValueError("Model output contains a non-JSON numeric constant.")
 
 
 def parse_answers(text):
@@ -100,19 +88,20 @@ def main(argv=None):
     command = [executable, "--agent-file", str(agent_file), "--model", chosen_model,
                "--skills-dir", str(directory / "empty-skills"),
                "--prompt", "Return the JSON decisions for these independent scenarios:\n" + cases,
-               "--output-format", "text"]
+               "--output-format", "stream-json"]
     started = time.monotonic()
     process = {"status": "error", "exit_code": None, "reason": "runner_error", "log": None}
     report = {"ok": False, "error": "Model evaluation did not complete; inspect private artifacts or retry explicitly."}
     try:
-        process = run_command(command, directory, args.timeout, directory / "model-output.json", env=env)
+        process = run_command(command, directory, args.timeout, directory / "model-output.json",
+                              env=env, stdout_limit=2_000_000)
         if process["status"] != "passed":
             raise ValueError("Kimi exited unsuccessfully; inspect private artifacts.")
         output = json.loads((directory / "model-output.json").read_text(encoding="utf-8"),
                             object_pairs_hook=unique_object, parse_constant=reject_constant)
         if not isinstance(output, dict) or output.get("stdout_truncated") is not False:
             raise ValueError("Complete model output is required for evaluation.")
-        answers = parse_answers(output.get("stdout"))
+        answers = parse_answers(assistant_reply(output.get("stdout")))
         submission = directory / "decisions.json"
         submission.write_text(json.dumps(answers, ensure_ascii=False, indent=2), encoding="utf-8")
         report = evaluate(submission, mode=args.mode, admission=args.admission, threshold=args.threshold)
@@ -122,6 +111,7 @@ def main(argv=None):
     report["model"] = chosen_model
     report["model_selection"] = "explicit" if args.model is not None else "configured-default"
     report["evaluation_mode"] = args.mode
+    report["output_format"] = "stream-json"
     report["process"] = process
     report["model_call_attempted"] = True
     report["model_executed"] = process.get("status") == "passed"
@@ -134,7 +124,7 @@ def main(argv=None):
     report["context_sha256"] = hashlib.sha256((definition + "\n" + context).encode("utf-8")).hexdigest()
     report["elapsed_seconds"] = round(time.monotonic() - started, 3)
     report["tokens"] = None
-    report["token_note"] = "Token usage is not reported by the text CLI transport."
+    report["token_note"] = "Token usage is not reported by this CLI transport."
     (directory / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["ok"] else 1

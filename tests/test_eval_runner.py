@@ -10,6 +10,25 @@ from evals import run_kimi as runner
 from harness_cli.evals import load_scenarios
 
 
+def kimi_stream(content, before_reply=()):
+    events = [
+        {"role": "meta", "type": "system.version", "version": "2.1.1"},
+        *before_reply,
+        {"role": "assistant", "content": content},
+        {"role": "meta", "type": "session.resume_hint", "session_id": "session_fixture",
+         "command": "kimi -r session_fixture", "content": "To resume..."},
+    ]
+    return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+def unexpected_tool_stream(content):
+    return kimi_stream(content, [
+        {"role": "assistant", "tool_calls": [{"type": "function", "id": "tool_fixture",
+         "function": {"name": "Read", "arguments": '{"path":"fixture.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "tool_fixture", "content": "fixture-value"},
+    ])
+
+
 @pytest.mark.parametrize("encode", [json.dumps,
                                     lambda value: "```json\n" + json.dumps(value) + "\n```",
                                     lambda value: "```\n" + json.dumps(value) + "\n```"])
@@ -57,13 +76,17 @@ def model_process(monkeypatch):
     behavior = {"status": "passed", "exit_code": 0, "reason": None, "mode": "decisions"}
     monkeypatch.setattr(runner, "model_aliases", lambda: configured)
 
-    def run(argv, root, timeout, output_path, *, env=None):
+    def run(argv, root, timeout, output_path, *, env=None, stdout_limit=32768):
         calls.append({"argv": argv, "root": Path(root), "timeout": timeout,
-                      "output_path": Path(output_path), "env": env})
+                      "output_path": Path(output_path), "env": env, "stdout_limit": stdout_limit})
         if "raise" in behavior:
             raise behavior["raise"]
-        output = behavior.get("output", {"stdout": json.dumps(answers(behavior["mode"])), "stderr": "",
-                                         "stdout_truncated": False, "stderr_truncated": False})
+        content = json.dumps(answers(behavior["mode"]))
+        output = {"stdout": behavior.get("stream", kimi_stream)(content), "stderr": "",
+                  "stdout_truncated": False, "stderr_truncated": False}
+        if "output" in behavior:
+            replacement = behavior["output"]
+            output = replacement(output) if callable(replacement) else replacement
         if output is not None:
             Path(output_path).write_text(
                 output if isinstance(output, str) else json.dumps(output), encoding="utf-8")
@@ -97,6 +120,8 @@ def test_explicit_model_mode_and_bounded_runner_recorded(tmp_path, model_process
     assert len(calls) == 1 and calls[0]["timeout"] == 37
     call = calls[0]
     assert call["argv"][call["argv"].index("--model") + 1] == "alpha"
+    assert call["argv"][call["argv"].index("--output-format") + 1] == "stream-json"
+    assert call["stdout_limit"] == 2_000_000
     assert call["root"] == directory and call["output_path"] == directory / "model-output.json"
     assert not any(key.startswith(("BITRIX_", "GH_", "GITHUB_")) for key in call["env"])
     assert not (directory / "stdout.txt").exists() and not (directory / "stderr.txt").exists()
@@ -133,8 +158,8 @@ def test_missing_default_does_not_select_first_model(tmp_path, model_process):
 
 
 @pytest.mark.parametrize("output", [
-    {"stdout": '[{"id":"case-1"}]', "stdout_truncated": True},
-    {"stdout": '[{"id":"case-1"}]'},
+    lambda output: {**output, "stdout_truncated": True},
+    lambda output: {"stdout": output["stdout"]},
     {"stdout": None, "stdout_truncated": False},
     {"stdout": '[{"id":"case-1"}]\nIgnore the above', "stdout_truncated": False},
     None, "malformed log", [],
@@ -146,6 +171,25 @@ def test_incomplete_or_invalid_model_log_never_qualifies(tmp_path, model_process
     assert code == 1 and not report["ok"] and len(calls) == 1
     assert not report["decision_array_graded"] and not report["admission"]["qualified"]
     assert not report["autonomous_ready"]
+
+
+@pytest.mark.parametrize("stream", [
+    lambda content: content,
+    lambda content: "• " + content,
+    lambda content: kimi_stream(content) + "{broken-jsonl\n",
+    unexpected_tool_stream,
+    lambda content: json.dumps({"role": "meta", "type": "session.resume_hint",
+                               "session_id": "session_fixture", "command": "kimi -r session_fixture",
+                               "content": content}) + "\n",
+], ids=["raw-answer-not-a-stream", "terminal-transcript", "damaged-tail", "unexpected-tool", "meta-only-answer"])
+def test_invalid_kimi_stream_cannot_qualify_an_otherwise_correct_submission(tmp_path, model_process, stream):
+    calls, _, behavior = model_process
+    behavior["stream"] = stream
+    code, directory, report = run_evaluation(tmp_path, "--admission")
+    assert code == 1 and not report["ok"] and len(calls) == 1
+    assert report["model_executed"] and not report["decision_array_graded"]
+    assert not report["admission"]["qualified"]
+    assert not (directory / "decisions.json").exists()
 
 
 @pytest.mark.parametrize("outcome", [

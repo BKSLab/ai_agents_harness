@@ -269,3 +269,87 @@ def test_redaction_preserves_task_artifact_paths_and_masks_standalone_tokens():
     for prefix in ("sk-", "ghp_", "ghu_"):
         token = prefix + "synthetic" * 4
         assert redact_credentials(f"credential: '{token}'") == "credential: '[REDACTED]'"
+
+
+def jsonl_child_command():
+    return [sys.executable, "-c", "\n".join([
+        "import json, os, sys",
+        "print(json.dumps({'type': 'tool_result', 'content': 'x' * 60000, 'database': os.environ['DATABASE_URL']}))",
+        "print(json.dumps({'type': 'assistant', 'content': 'FINAL_VERDICT'}))",
+        "sys.stderr.write('e' * 40000)",
+    ])]
+
+
+def test_explicit_stdout_limit_preserves_large_jsonl_and_redacts_its_late_credentials(tmp_path, monkeypatch):
+    value = "postgresql://fixture_user:fixture_password@database.example.invalid/app"
+    monkeypatch.setenv("DATABASE_URL", value)
+    path = tmp_path / "complete-jsonl.json"
+    result = artifacts.run_command(jsonl_child_command(), tmp_path, 5, path, stdout_limit=2_000_000)
+    assert result["status"] == "passed"
+    captured = json.loads(path.read_text(encoding="utf-8"))
+    assert not captured["stdout_truncated"]
+    records = [json.loads(line) for line in captured["stdout"].splitlines()]
+    assert len(records) == 2 and len(records[0]["content"]) == 60000
+    assert records[0]["database"] == "[REDACTED]"
+    assert records[1] == {"type": "assistant", "content": "FINAL_VERDICT"}
+    assert value not in captured["stdout"] and "fixture_password" not in captured["stdout"]
+    assert captured["stderr_truncated"] and captured["stderr"] == "e" * 32768
+
+
+def test_default_stdout_limit_still_truncates_large_jsonl(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://fixture_user:fixture_password@database.example.invalid/app")
+    path = tmp_path / "default-jsonl.json"
+    result = artifacts.run_command(jsonl_child_command(), tmp_path, 5, path)
+    assert result["status"] == "passed"
+    captured = json.loads(path.read_text(encoding="utf-8"))
+    assert captured["stdout_truncated"] and len(captured["stdout"]) == 32768
+    assert "FINAL_VERDICT" not in captured["stdout"]
+    assert captured["stderr_truncated"] and len(captured["stderr"]) == 32768
+
+
+@pytest.mark.parametrize("limit", [True, False, None, "32768", 32768.0, 0, -1, 2_000_001])
+def test_invalid_stdout_limit_is_rejected_before_a_process_can_start(tmp_path, monkeypatch, limit):
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Invalid output limit must not spawn a process."))
+    output = tmp_path / "must-not-exist.json"
+    with pytest.raises(ValueError, match="stdout_limit"):
+        artifacts.run_command([sys.executable, "-c", "pass"], tmp_path, 5, output, stdout_limit=limit)
+    assert not output.exists()
+
+
+def test_explicit_one_byte_stdout_limit_is_supported(tmp_path):
+    path = tmp_path / "one-byte.json"
+    result = artifacts.run_command([sys.executable, "-c", "print('abc')"], tmp_path, 5, path, stdout_limit=1)
+    assert result["status"] == "passed"
+    captured = json.loads(path.read_text(encoding="utf-8"))
+    assert captured["stdout"] == "a" and captured["stdout_truncated"]
+
+
+def test_larger_capture_does_not_relax_the_existing_hard_process_output_limit(tmp_path):
+    path = tmp_path / "output-limit.json"
+    result = artifacts.run_command([sys.executable, "-c", "import sys; sys.stdout.write('x' * 2_000_001)"],
+                                   tmp_path, 5, path, stdout_limit=2_000_000)
+    assert result["status"] == "error" and result["reason"] == "output_limit"
+    captured = json.loads(path.read_text(encoding="utf-8"))
+    assert captured["stdout_truncated"] and len(captured["stdout"]) <= 2_000_000
+
+
+@pytest.mark.parametrize("shape", ["letters", "malformed-url"])
+def test_redaction_of_large_adversarial_text_completes_in_a_bounded_child(shape):
+    command = "\n".join([
+        "import json, sys",
+        "from harness_cli.redaction import redact_credentials",
+        "text = 'q' * 2_000_000 if sys.argv[1] == 'letters' else 'postgresql://' + 'a:' * 999_990",
+        "result = redact_credentials(text)",
+        "print(json.dumps({'length': len(result), 'unchanged': result == text}))",
+    ])
+    run = subprocess.run([sys.executable, "-c", command, shape], cwd=Path(artifacts.__file__).resolve().parents[1],
+                         capture_output=True, text=True, encoding="utf-8", timeout=10, check=True)
+    report = json.loads(run.stdout)
+    assert report["unchanged"] and report["length"] > 1_900_000
+    assert len(run.stdout) < 100 and run.stderr == ""
+
+
+@pytest.mark.parametrize("scheme", ["postgres", "postgresql", "https"])
+def test_bounded_url_matching_still_masks_real_credential_shapes(scheme):
+    value = f"{scheme}://fixture_user:encoded%40password@database.example.invalid/app"
+    assert redact_credentials(value) == f"{scheme}://[REDACTED]@database.example.invalid/app"

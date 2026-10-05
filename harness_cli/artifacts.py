@@ -180,7 +180,9 @@ def python_for(root):
     return str(candidate) if candidate.is_file() else sys.executable
 
 
-def run_command(argv, root, timeout, output_path, *, env=None):
+def run_command(argv, root, timeout, output_path, *, env=None, stdout_limit=32768):
+    if isinstance(stdout_limit, bool) or not isinstance(stdout_limit, int) or not 1 <= stdout_limit <= 2_000_000:
+        raise ValueError("stdout_limit must be an integer between 1 and 2000000 bytes.")
     started = time.monotonic()
     # File-backed capture bounds memory. Receipts persist only a redacted, bounded excerpt.
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
@@ -217,11 +219,11 @@ def run_command(argv, root, timeout, output_path, *, env=None):
             process.wait(timeout=10)
             code, status, reason = None, "error", reason or "timeout"
         excerpt = {}
-        for name, stream in (("stdout", stdout), ("stderr", stderr)):
+        for name, stream, limit in (("stdout", stdout, stdout_limit), ("stderr", stderr, 32768)):
             length = stream.seek(0, os.SEEK_END)
             stream.seek(0)
-            excerpt[name] = redact(stream.read(32768).decode("utf-8", errors="replace"))
-            excerpt[name + "_truncated"] = length > 32768
+            excerpt[name] = redact(stream.read(limit).decode("utf-8", errors="replace"))
+            excerpt[name + "_truncated"] = length > limit
         atomic_write(Path(output_path), json_bytes(excerpt))
     return {"status": status, "exit_code": code, "reason": reason,
             "duration_seconds": round(time.monotonic() - started, 3), "log": str(output_path)}
